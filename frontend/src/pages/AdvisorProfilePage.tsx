@@ -4,6 +4,7 @@ import { ArrowLeft, CheckCircle, Star, MessageCircle, Video, Clock, Award, UserX
 import { Avatar } from '@/shared/components/ui/Avatar'
 import { Badge } from '@/shared/components/ui/Badge'
 import { Button } from '@/shared/components/ui/Button'
+import { CrisisResourceBanner } from '@/shared/components/ui/CrisisResourceBanner'
 import { EmptyState } from '@/shared/components/ui/EmptyState'
 import { ErrorBanner } from '@/shared/components/ui/ErrorBanner'
 import { Skeleton } from '@/shared/components/ui/Skeleton'
@@ -150,6 +151,8 @@ export function AdvisorProfilePage() {
           <ArrowLeft className="w-4 h-4" />
           Back
         </button>
+
+        {advisor.sectors.includes('Mental Health') && <CrisisResourceBanner />}
 
         {/* Main card */}
         <div className="bg-white rounded-xl border border-ink-200 overflow-hidden mb-6">

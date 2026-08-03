@@ -52,6 +52,15 @@ public class SubmitApplicationRequest {
     private String country;
 
     /**
+     * Required only for FINANCE and MENTAL_HEALTH applications — enforced in
+     * {@code AdvisorApplicationService#submitApplication}, not here, because the requirement
+     * depends on {@link #sectors} rather than being a fixed rule for every application.
+     */
+    private String licenseNumber;
+    private String licenseIssuingAuthority;
+    private String licenseState;
+
+    /**
      * Identity documents, uploaded separately via the pre-signed URL endpoint and described here.
      *
      * <p>{@code @Valid} is load-bearing: without it Bean Validation stops at the list itself and

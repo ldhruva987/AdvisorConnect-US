@@ -78,12 +78,24 @@ public class AdvisorApplicationService implements AdvisorQueryUseCase, AdvisorCo
         return applications.map(this::toSummaryDto);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public AdvisorApplicationDetailDto getApplicationDetail(UUID applicationId) {
+        return toDetailDto(applicationRepository.findById(applicationId)
+                .orElseThrow(() -> new IllegalArgumentException("Application not found")));
+    }
+
     // ── Command use case ────────────────────────────────────────────────────────
 
     @Override
     public UUID submitApplication(SubmitApplicationRequest req, UUID userId) {
         if (applicationRepository.existsByUserId(userId)) {
             throw new IllegalStateException("Application already submitted");
+        }
+        if (requiresLicense(req.getSectors()) && !hasLicenseFields(req)) {
+            throw new IllegalArgumentException(
+                    "A license number, issuing authority and state are required for FINANCE and "
+                            + "MENTAL_HEALTH applications");
         }
         AdvisorApplication app = AdvisorApplication.builder()
                 .userId(userId)
@@ -100,6 +112,9 @@ public class AdvisorApplicationService implements AdvisorQueryUseCase, AdvisorCo
                 .dateOfBirth(req.getDateOfBirth())
                 .addressFull(req.getAddressFull())
                 .country(req.getCountry())
+                .licenseNumber(req.getLicenseNumber())
+                .licenseIssuingAuthority(req.getLicenseIssuingAuthority())
+                .licenseState(req.getLicenseState())
                 .documents(toDocuments(req.getDocuments()))
                 .status(ApplicationStatus.PENDING)
                 .build();
@@ -112,6 +127,11 @@ public class AdvisorApplicationService implements AdvisorQueryUseCase, AdvisorCo
     public void approveAdvisor(UUID applicationId, UUID adminId, String notes) {
         AdvisorApplication app = applicationRepository.findById(applicationId)
                 .orElseThrow(() -> new IllegalArgumentException("Application not found"));
+        if (requiresLicense(app.getSectors()) && !app.isLicenseVerified()) {
+            throw new LicenseNotVerifiedException(
+                    "Cannot approve: this is a FINANCE or MENTAL_HEALTH application and its "
+                            + "license has not been verified yet");
+        }
         app.setStatus(ApplicationStatus.APPROVED);
         app.setAdminNotes(notes);
         app.setReviewedAt(Instant.now());
@@ -156,7 +176,41 @@ public class AdvisorApplicationService implements AdvisorQueryUseCase, AdvisorCo
         applicationRepository.save(app);
     }
 
+    /**
+     * Does not require the application to carry a regulated sector: an admin who has already
+     * looked a license up loses nothing by recording that, and refusing to record it on a
+     * technicality would only invite working around this method instead of through it.
+     */
+    @Override
+    public void verifyLicense(UUID applicationId, UUID adminId) {
+        AdvisorApplication app = applicationRepository.findById(applicationId)
+                .orElseThrow(() -> new IllegalArgumentException("Application not found"));
+        app.setLicenseVerified(true);
+        app.setLicenseVerifiedAt(Instant.now());
+        app.setLicenseVerifiedBy(adminId);
+        applicationRepository.save(app);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────
+
+    /** FINANCE (investment advice) and MENTAL_HEALTH (clinical counseling) are the two verticals
+     *  where charging for advice without a checked credential is a real regulatory liability in
+     *  the US (state RIA/SEC registration; state clinical licensing boards) rather than just a
+     *  quality signal. */
+    private static boolean requiresLicense(List<AdvisorSector> sectors) {
+        return sectors != null
+                && (sectors.contains(AdvisorSector.FINANCE) || sectors.contains(AdvisorSector.MENTAL_HEALTH));
+    }
+
+    private static boolean hasLicenseFields(SubmitApplicationRequest req) {
+        return isNotBlank(req.getLicenseNumber())
+                && isNotBlank(req.getLicenseIssuingAuthority())
+                && isNotBlank(req.getLicenseState());
+    }
+
+    private static boolean isNotBlank(String s) {
+        return s != null && !s.isBlank();
+    }
 
     /**
      * Reads the advisor's email out of the local projection of auth-service's
@@ -214,9 +268,56 @@ public class AdvisorApplicationService implements AdvisorQueryUseCase, AdvisorCo
                 .sectors(app.getSectors())
                 .qualification(app.getQualification())
                 .experienceYears(app.getExperienceYears())
+                .licenseIssuingAuthority(app.getLicenseIssuingAuthority())
+                .licenseState(app.getLicenseState())
+                .licenseVerified(app.isLicenseVerified())
                 .status(app.getStatus())
                 .submittedAt(app.getSubmittedAt())
                 .documentCount(app.getDocuments() == null ? 0 : app.getDocuments().size())
+                .build();
+    }
+
+    /** Admin-only — see {@link AdvisorApplicationDetailDto}. Documents carry no S3 key. */
+    private AdvisorApplicationDetailDto toDetailDto(AdvisorApplication app) {
+        List<AdvisorApplicationDetailDto.DocumentSummary> documents = app.getDocuments() == null
+                ? List.of()
+                : app.getDocuments().stream()
+                        .map(d -> AdvisorApplicationDetailDto.DocumentSummary.builder()
+                                .fileName(d.getFileName())
+                                .mimeType(d.getMimeType())
+                                .sizeBytes(d.getSizeBytes())
+                                .uploadedAt(d.getUploadedAt())
+                                .build())
+                        .toList();
+
+        return AdvisorApplicationDetailDto.builder()
+                .id(app.getId())
+                .userId(app.getUserId())
+                .username(app.getUsername())
+                .professionalTitle(app.getProfessionalTitle())
+                .bio(app.getBio())
+                .sectors(app.getSectors())
+                .qualification(app.getQualification())
+                .fieldOfStudy(app.getFieldOfStudy())
+                .experienceYears(app.getExperienceYears())
+                .previousWork(app.getPreviousWork())
+                .legalFirstName(app.getLegalFirstName())
+                .legalLastName(app.getLegalLastName())
+                .dateOfBirth(app.getDateOfBirth())
+                .addressFull(app.getAddressFull())
+                .country(app.getCountry())
+                .licenseNumber(app.getLicenseNumber())
+                .licenseIssuingAuthority(app.getLicenseIssuingAuthority())
+                .licenseState(app.getLicenseState())
+                .licenseVerified(app.isLicenseVerified())
+                .licenseVerifiedAt(app.getLicenseVerifiedAt())
+                .licenseVerifiedBy(app.getLicenseVerifiedBy())
+                .documents(documents)
+                .status(app.getStatus())
+                .adminNotes(app.getAdminNotes())
+                .submittedAt(app.getSubmittedAt())
+                .reviewedAt(app.getReviewedAt())
+                .reviewedBy(app.getReviewedBy())
                 .build();
     }
 

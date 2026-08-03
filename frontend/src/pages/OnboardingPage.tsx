@@ -13,7 +13,7 @@ import {
 import { useSubmitApplication } from '@/features/onboarding/hooks/useSubmitApplication'
 import { getErrorMessage } from '@/lib/getErrorMessage'
 import { ALL_SECTORS, SECTOR_LABELS, type AdvisorSectorEnum } from '@/lib/sectors'
-import type { SubmitApplicationRequest, UploadDocType } from '@/types/api'
+import type { DocumentMetadataRequest, SubmitApplicationRequest, UploadDocType } from '@/types/api'
 
 const STEPS = ['Public Profile', 'Credentials', 'Identity Verification', 'Review & Submit']
 
@@ -155,6 +155,12 @@ export function OnboardingPage() {
     fieldOfStudy: '',
     experienceYears: '',
     previousWork: '',
+    // Required only when Finance or Mental Health is among selectedSectors — enforced
+    // server-side, mirrored here so the form can show the fields and the submit button can
+    // reflect the requirement before the round trip.
+    licenseNumber: '',
+    licenseIssuingAuthority: '',
+    licenseState: '',
     legalFirstName: '',
     legalLastName: '',
     dob: '',
@@ -213,8 +219,19 @@ export function OnboardingPage() {
 
   const missingRequired = REQUIRED_SLOTS.filter((slot) => !files[slot.id])
   const busy = uploading || submitApplication.isPending
+  const licenseRequired =
+    form.selectedSectors.includes('FINANCE') || form.selectedSectors.includes('MENTAL_HEALTH')
+  const hasLicenseFields =
+    !licenseRequired ||
+    (form.licenseNumber.trim() !== '' &&
+      form.licenseIssuingAuthority.trim() !== '' &&
+      form.licenseState.trim() !== '')
   const canSubmit =
-    form.consentData && form.consentTerms && missingRequired.length === 0 && !busy
+    form.consentData &&
+    form.consentTerms &&
+    missingRequired.length === 0 &&
+    hasLicenseFields &&
+    !busy
 
   /**
    * Presign → PUT → submit, in that order and strictly sequentially: the
@@ -228,7 +245,10 @@ export function OnboardingPage() {
       (entry): entry is { slot: UploadSlot; file: File } => entry.file !== null,
     )
 
-    const documentS3Keys: string[] = []
+    // The backend's SubmitApplicationRequest.documents is @NotEmpty @Valid List<
+    // DocumentMetadataRequest> — a bare list of object keys fails validation with a 400. Each
+    // entry needs the same filename/size/type the presign request itself carried.
+    const documents: DocumentMetadataRequest[] = []
     setUploading(true)
     try {
       for (const { slot, file } of pending) {
@@ -238,7 +258,12 @@ export function OnboardingPage() {
           docType: slot.docType,
         })
         await uploadFileToPresignedUrl(file, presigned.uploadUrl)
-        documentS3Keys.push(presigned.objectKey)
+        documents.push({
+          s3Key: presigned.objectKey,
+          fileName: file.name,
+          sizeBytes: file.size,
+          mimeType: file.type,
+        })
       }
     } catch (err) {
       setSubmitError(getErrorMessage(err))
@@ -246,6 +271,10 @@ export function OnboardingPage() {
     } finally {
       setUploading(false)
     }
+
+    const requiresLicense = form.selectedSectors.some(
+      (sector) => sector === 'FINANCE' || sector === 'MENTAL_HEALTH',
+    )
 
     const body: SubmitApplicationRequest = {
       username: form.username,
@@ -265,7 +294,12 @@ export function OnboardingPage() {
         .filter(Boolean)
         .join(', '),
       country: form.country,
-      documentS3Keys,
+      ...(requiresLicense && {
+        licenseNumber: form.licenseNumber,
+        licenseIssuingAuthority: form.licenseIssuingAuthority,
+        licenseState: form.licenseState,
+      }),
+      documents,
     }
 
     try {
@@ -521,6 +555,47 @@ export function OnboardingPage() {
                 })}
               </div>
 
+              {/*
+                Finance (investment advice) and Mental Health (clinical counseling) are the two
+                verticals where the US treats charging for advice without a checked professional
+                credential as a real regulatory liability (state RIA/SEC registration; state
+                clinical licensing boards), not just a quality signal — so the backend refuses to
+                approve either without one. Shown only for those sectors so a Career or Parenting
+                applicant, for whom this genuinely doesn't apply, isn't asked for it.
+              */}
+              {(form.selectedSectors.includes('FINANCE') ||
+                form.selectedSectors.includes('MENTAL_HEALTH')) && (
+                <div className="space-y-4 rounded-xl border border-warn-600/30 bg-warn-100/40 p-4">
+                  <p className="text-sm font-medium text-ink-800">
+                    Professional license required for {form.selectedSectors.includes('FINANCE') ? 'Finance' : ''}
+                    {form.selectedSectors.includes('FINANCE') && form.selectedSectors.includes('MENTAL_HEALTH') ? ' and ' : ''}
+                    {form.selectedSectors.includes('MENTAL_HEALTH') ? 'Mental Health' : ''} advisors
+                  </p>
+                  <Input
+                    label="License Number"
+                    placeholder="e.g. LPC-4471 or CRD number"
+                    value={form.licenseNumber}
+                    onChange={(e) => update('licenseNumber', e.target.value)}
+                  />
+                  <Input
+                    label="Issuing Authority"
+                    placeholder="e.g. California Board of Behavioral Sciences, or SEC"
+                    value={form.licenseIssuingAuthority}
+                    onChange={(e) => update('licenseIssuingAuthority', e.target.value)}
+                  />
+                  <Input
+                    label="License State"
+                    placeholder="Two-letter state code, or FEDERAL for SEC/FINRA credentials"
+                    value={form.licenseState}
+                    onChange={(e) => update('licenseState', e.target.value)}
+                  />
+                  <p className="text-xs text-ink-500">
+                    Our team verifies this against the issuing authority before your profile goes
+                    live — your application cannot be approved until that check is complete.
+                  </p>
+                </div>
+              )}
+
               <Textarea
                 label="Previous Work / Experience Summary"
                 placeholder="Briefly describe your professional experience, notable achievements, or previous roles..."
@@ -698,6 +773,13 @@ export function OnboardingPage() {
                   <p><span className="text-ink-400">Qualification:</span> {form.qualification || 'Not set'}</p>
                   <p><span className="text-ink-400">Field of Study:</span> {form.fieldOfStudy || 'Not set'}</p>
                   <p><span className="text-ink-400">Experience:</span> {form.experienceYears || 'Not set'}</p>
+                  {licenseRequired && (
+                    <>
+                      <p><span className="text-ink-400">License Number:</span> {form.licenseNumber || 'Not set'}</p>
+                      <p><span className="text-ink-400">Issuing Authority:</span> {form.licenseIssuingAuthority || 'Not set'}</p>
+                      <p><span className="text-ink-400">License State:</span> {form.licenseState || 'Not set'}</p>
+                    </>
+                  )}
                 </div>
               </div>
 

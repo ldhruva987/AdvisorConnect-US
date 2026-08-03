@@ -218,6 +218,54 @@ class SecurityConfigTest {
         verifyNoInteractions(commandUseCase);
     }
 
+    @Test
+    @DisplayName("GET /advisors/applications/{id} as a plain USER is forbidden")
+    void applicationDetailAsUserIsForbidden() throws Exception {
+        mockMvc.perform(get("/advisors/applications/{id}", UUID.randomUUID())
+                        .header("X-User-Id", USER_ID)
+                        .header("X-User-Role", "USER"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(queryUseCase);
+    }
+
+    @Test
+    @DisplayName("GET /advisors/applications/{id} as an ADMIN passes the security layer")
+    void applicationDetailAsAdminIsAllowed() throws Exception {
+        UUID applicationId = UUID.randomUUID();
+
+        mockMvc.perform(get("/advisors/applications/{id}", applicationId)
+                        .header("X-User-Id", ADMIN_ID)
+                        .header("X-User-Role", "ADMIN"))
+                .andExpect(status().isOk());
+
+        verify(queryUseCase).getApplicationDetail(applicationId);
+    }
+
+    @Test
+    @DisplayName("PUT /advisors/applications/{id}/verify-license as a plain USER is forbidden")
+    void verifyLicenseAsUserIsForbidden() throws Exception {
+        mockMvc.perform(put("/advisors/applications/{id}/verify-license", UUID.randomUUID())
+                        .header("X-User-Id", USER_ID)
+                        .header("X-User-Role", "USER"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(commandUseCase);
+    }
+
+    @Test
+    @DisplayName("PUT /advisors/applications/{id}/verify-license as an ADMIN passes the security layer")
+    void verifyLicenseAsAdminIsAllowed() throws Exception {
+        UUID applicationId = UUID.randomUUID();
+
+        mockMvc.perform(put("/advisors/applications/{id}/verify-license", applicationId)
+                        .header("X-User-Id", ADMIN_ID)
+                        .header("X-User-Role", "ADMIN"))
+                .andExpect(status().isOk());
+
+        verify(commandUseCase).verifyLicense(applicationId, UUID.fromString(ADMIN_ID));
+    }
+
     // ------------------------------------------------------------------- reviews
 
     /**

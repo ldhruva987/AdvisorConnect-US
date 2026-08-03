@@ -109,10 +109,24 @@ async function completeProfileStep(user: UserEvent) {
   await clickContinue(user)
 }
 
-async function completeCredentialsStep(user: UserEvent, { withDegree = true } = {}) {
+/**
+ * `completeProfileStep` always selects Mental Health, which makes the license fields required —
+ * filled by default here so every test that drives the wizard through to submission doesn't have
+ * to know that. `withLicenseInfo: false` is for the tests that stop before the final step and
+ * never care whether the Submit button would actually be enabled.
+ */
+async function completeCredentialsStep(
+  user: UserEvent,
+  { withDegree = true, withLicenseInfo = true } = {},
+) {
   await user.selectOptions(screen.getByLabelText(/highest qualification/i), 'PhD')
   fill(/field of study/i, 'Clinical Psychology')
   await user.selectOptions(screen.getByLabelText(/years of experience/i), '6–10 years')
+  if (withLicenseInfo) {
+    fill(/license number/i, 'LPC-4471')
+    fill(/issuing authority/i, 'California Board of Behavioral Sciences')
+    fill(/license state/i, 'CA')
+  }
   fill(/previous work/i, 'Head of psychology at a community clinic.')
   if (withDegree) await user.upload(screen.getByLabelText(UPLOAD_LABELS.degree), DEGREE_FILE)
   await clickContinue(user)
@@ -359,10 +373,29 @@ describe('OnboardingPage', () => {
         dateOfBirth: '1990-01-01',
         addressFull: '123 Main Street, New York, NY, 10001',
         country: 'United States',
-        documentS3Keys: [
-          'applications/user-1/degree.pdf',
-          'applications/user-1/id-front.png',
-          'applications/user-1/id-back.png',
+        // Mental Health is one of the two selected sectors, so the license block is required.
+        licenseNumber: 'LPC-4471',
+        licenseIssuingAuthority: 'California Board of Behavioral Sciences',
+        licenseState: 'CA',
+        documents: [
+          {
+            s3Key: 'applications/user-1/degree.pdf',
+            fileName: 'degree.pdf',
+            sizeBytes: 2048,
+            mimeType: 'application/pdf',
+          },
+          {
+            s3Key: 'applications/user-1/id-front.png',
+            fileName: 'id-front.png',
+            sizeBytes: 2048,
+            mimeType: 'image/png',
+          },
+          {
+            s3Key: 'applications/user-1/id-back.png',
+            fileName: 'id-back.png',
+            sizeBytes: 2048,
+            mimeType: 'image/png',
+          },
         ],
       })
     })
@@ -390,6 +423,9 @@ describe('OnboardingPage', () => {
       await user.selectOptions(screen.getByLabelText(/highest qualification/i), 'PhD')
       fill(/field of study/i, 'Clinical Psychology')
       await user.selectOptions(screen.getByLabelText(/years of experience/i), '6–10 years')
+      fill(/license number/i, 'LPC-4471')
+      fill(/issuing authority/i, 'California Board of Behavioral Sciences')
+      fill(/license state/i, 'CA')
       await user.upload(screen.getByLabelText(UPLOAD_LABELS.degree), DEGREE_FILE)
       await user.upload(
         screen.getByLabelText(UPLOAD_LABELS.license),
@@ -401,7 +437,7 @@ describe('OnboardingPage', () => {
       await user.click(submitButton())
 
       await waitFor(() => expect(spies.submissions).toHaveLength(1))
-      expect(spies.submissions[0].documentS3Keys).toEqual([
+      expect(spies.submissions[0].documents.map((d) => d.s3Key)).toEqual([
         'applications/user-1/degree.pdf',
         'applications/user-1/license.pdf',
         'applications/user-1/id-front.png',

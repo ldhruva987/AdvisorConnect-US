@@ -183,6 +183,23 @@ describe('AdvisorProfilePage', () => {
     })
   })
 
+  describe('crisis resources', () => {
+    it('shows the 988 crisis banner for a Mental Health advisor', async () => {
+      renderProfile('sam_okafor')
+      await screen.findByRole('heading', { name: 'sam_okafor' })
+
+      expect(screen.getByRole('note', { name: /crisis support resources/i })).toBeInTheDocument()
+      expect(screen.getByText('988')).toBeInTheDocument()
+    })
+
+    it('does not show the crisis banner for an advisor outside Mental Health', async () => {
+      renderProfile('maya_chen')
+      await screen.findByRole('heading', { name: 'maya_chen' })
+
+      expect(screen.queryByRole('note', { name: /crisis support resources/i })).not.toBeInTheDocument()
+    })
+  })
+
   describe('loading', () => {
     it('shows a profile skeleton before the request settles', () => {
       renderProfile('maya_chen')

@@ -19,6 +19,7 @@ import {
   useApplicationDecision,
   type ApplicationDecision,
 } from '@/features/admin/hooks/useApplicationDecision'
+import { useVerifyLicense } from '@/features/admin/hooks/useVerifyLicense'
 import { getErrorMessage } from '@/lib/getErrorMessage'
 import { useToastStore } from '@/stores/toastStore'
 import type { AdvisorApplication, ApplicationStatus } from '@/types'
@@ -69,15 +70,9 @@ const PLACEHOLDER_NAV: Partial<Record<AdminNav, string>> = {
   settings: 'Platform settings are not available yet.',
 }
 
-/** Which application ids the detail panel / decision buttons apply to. */
+/** Which application id the detail panel / decision buttons apply to. */
 interface SelectedApplication {
   id: string
-  /**
-   * The status filter the row was clicked from. `useApplicationDetail` reads
-   * the cache entry `useApplications` wrote, and that entry is keyed by status
-   * — so the lookup has to be scoped the same way the list was.
-   */
-  scope?: ApplicationStatus
 }
 
 function formatCount(value: number): string {
@@ -93,6 +88,10 @@ function formatDate(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return '—'
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function formatFileSizeKb(sizeBytes: number): string {
+  return `${(sizeBytes / 1024).toFixed(1)} KB`
 }
 
 /** Approve/reject only make sense while the application is still open. */
@@ -126,16 +125,14 @@ export function AdminDashboardPage() {
 
   const listScope: ApplicationStatus | undefined = filterStatus === 'All' ? undefined : filterStatus
 
-  // Both lists are subscribed unconditionally rather than per-tab. Two reasons:
-  // an unmounted query is garbage-collected, and `useApplicationDetail` reads
-  // straight out of that cache — so dropping the subscription when the detail
-  // panel opens would empty the panel. When `filterStatus` is 'PENDING' the two
-  // share a key and TanStack dedupes them into one request.
+  // When `filterStatus` is 'PENDING' the two share a key and TanStack dedupes
+  // them into one request.
   const applications = useApplications(listScope)
   const pendingPreview = useApplications('PENDING')
 
-  const detail = useApplicationDetail(selected?.id, selected?.scope)
+  const detail = useApplicationDetail(selected?.id)
   const decision = useApplicationDecision()
+  const verifyLicense = useVerifyLicense()
 
   // Only the row currently being decided should show a busy state, not every row.
   const decidingId = decision.isPending ? decision.variables?.id : undefined
@@ -152,8 +149,8 @@ export function AdminDashboardPage() {
    * `MOCK_APPLICATIONS[0]` no matter which row's "Review" was clicked. It now
    * renders whichever id was actually selected.
    */
-  const openApplication = (id: string, scope?: ApplicationStatus) => {
-    setSelected({ id, scope })
+  const openApplication = (id: string) => {
+    setSelected({ id })
     setAdminNotes('')
     setAdminNav('applications')
     setAdminPage('detail')
@@ -222,7 +219,7 @@ export function AdminDashboardPage() {
   const previewApplications = (pendingPreview.data?.applications ?? []).slice(0, PREVIEW_ROWS)
   const listApplications = applications.data?.applications ?? []
   const pendingCount = stats.data?.pendingApplications ?? 0
-  const detailApp = detail.application
+  const detailApp = detail.data
 
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
@@ -388,7 +385,7 @@ export function AdminDashboardPage() {
                             </td>
                             <td className="px-4 py-3">
                               <button
-                                onClick={() => openApplication(app.id, 'PENDING')}
+                                onClick={() => openApplication(app.id)}
                                 aria-label={`Review ${app.username}`}
                                 className="text-oxblood-700 font-semibold text-xs hover:text-oxblood-600 transition-colors"
                               >
@@ -517,7 +514,7 @@ export function AdminDashboardPage() {
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-3">
                             <button
-                              onClick={() => openApplication(app.id, listScope)}
+                              onClick={() => openApplication(app.id)}
                               aria-label={`Review ${app.username}`}
                               className="text-oxblood-700 font-semibold text-xs hover:text-oxblood-600 transition-colors flex items-center gap-1"
                             >
@@ -571,12 +568,17 @@ export function AdminDashboardPage() {
               {detailApp && <StatusBadge status={detailApp.status} />}
             </div>
 
-            {!detailApp ? (
+            {detail.isLoading ? (
+              <div className="grid lg:grid-cols-2 gap-5">
+                <Skeleton className="h-64" />
+                <Skeleton className="h-64" />
+              </div>
+            ) : !detailApp ? (
               <Card>
                 <EmptyState
                   icon={<Inbox className="w-8 h-8" />}
                   title="Application unavailable"
-                  description="This application is no longer in the loaded list. Go back and pick it again."
+                  description="This application could not be loaded. Go back and pick it again."
                 />
               </Card>
             ) : (
@@ -603,7 +605,7 @@ export function AdminDashboardPage() {
                     </p>
                   </Card>
 
-                  {/* Identity — the admin list response is PII-safe by design */}
+                  {/* Identity — real backend data now that GET /advisors/applications/{id} exists */}
                   <Card className="border-danger-600/30">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="font-heading font-semibold text-ink-900">Identity Verification</h3>
@@ -616,23 +618,31 @@ export function AdminDashboardPage() {
                             Legal Name
                           </td>
                           <td className="py-2.5 text-ink-800">
-                            {detailApp.legalName ?? (
-                              <span className="text-ink-400 italic">Not shown in list view</span>
-                            )}
+                            {detailApp.legalFirstName || detailApp.legalLastName
+                              ? `${detailApp.legalFirstName} ${detailApp.legalLastName}`.trim()
+                              : '—'}
                           </td>
+                        </tr>
+                        <tr>
+                          <td className="py-2.5 pr-4 text-xs font-semibold text-ink-500 uppercase tracking-wider whitespace-nowrap">
+                            Date of Birth
+                          </td>
+                          <td className="py-2.5 text-ink-800">{detailApp.dateOfBirth || '—'}</td>
+                        </tr>
+                        <tr>
+                          <td className="py-2.5 pr-4 text-xs font-semibold text-ink-500 uppercase tracking-wider whitespace-nowrap">
+                            Address
+                          </td>
+                          <td className="py-2.5 text-ink-800">{detailApp.addressFull || '—'}</td>
+                        </tr>
+                        <tr>
+                          <td className="py-2.5 pr-4 text-xs font-semibold text-ink-500 uppercase tracking-wider whitespace-nowrap">
+                            Country
+                          </td>
+                          <td className="py-2.5 text-ink-800">{detailApp.country || '—'}</td>
                         </tr>
                       </tbody>
                     </table>
-                    {/*
-                      Date of birth, email and address were hardcoded strings in
-                      the old mock. The application list endpoint deliberately
-                      does not return them, so the honest thing is to say so
-                      rather than render blurred fiction.
-                    */}
-                    <p className="text-xs text-ink-400 mt-3 leading-relaxed">
-                      Date of birth, email and address are not included in the admin
-                      application list response and cannot be shown here.
-                    </p>
                   </Card>
 
                   {/* Credentials card */}
@@ -659,6 +669,64 @@ export function AdminDashboardPage() {
                       </div>
                     </div>
                   </Card>
+
+                  {/*
+                    License card — only for Finance/Mental Health applications. The backend
+                    refuses to approve either without this being verified, so the Approve button
+                    below is disabled until it is.
+                  */}
+                  {(detailApp.licenseNumber || detailApp.licenseIssuingAuthority) && (
+                    <Card className={detailApp.licenseVerified ? 'border-pine-600/30' : 'border-warn-600/40'}>
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-heading font-semibold text-ink-900">Professional License</h3>
+                        {detailApp.licenseVerified ? (
+                          <Badge variant="success">Verified</Badge>
+                        ) : (
+                          <Badge variant="warn">Not Verified</Badge>
+                        )}
+                      </div>
+                      <div className="space-y-2 text-sm mb-4">
+                        <div className="flex justify-between gap-4">
+                          <span className="text-ink-400">License Number</span>
+                          <span className="font-medium text-ink-800 text-right">
+                            {detailApp.licenseNumber || '—'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between gap-4">
+                          <span className="text-ink-400">Issuing Authority</span>
+                          <span className="font-medium text-ink-800 text-right">
+                            {detailApp.licenseIssuingAuthority || '—'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between gap-4">
+                          <span className="text-ink-400">State</span>
+                          <span className="font-medium text-ink-800 text-right">
+                            {detailApp.licenseState || '—'}
+                          </span>
+                        </div>
+                      </div>
+                      {detailApp.licenseVerified ? (
+                        <p className="text-xs text-ink-400">
+                          Verified {detailApp.licenseVerifiedAt ? formatDate(detailApp.licenseVerifiedAt) : ''}.
+                        </p>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          fullWidth
+                          className="justify-center"
+                          loading={verifyLicense.isPending}
+                          onClick={() =>
+                            verifyLicense.mutate(detailApp.id, {
+                              onSuccess: () => showToast('License marked as verified.', 'success'),
+                              onError: (error) => showToast(getErrorMessage(error), 'error'),
+                            })
+                          }
+                        >
+                          Mark License as Verified
+                        </Button>
+                      )}
+                    </Card>
+                  )}
 
                   {/* Admin notes — submitted with the decision, not separately */}
                   <Card>
@@ -688,27 +756,41 @@ export function AdminDashboardPage() {
 
                 {/* RIGHT COLUMN */}
                 <div className="space-y-5">
-                  {/* Documents — only the count is in the list payload */}
+                  {/*
+                    Documents — filename/type/size/upload time, from the real detail endpoint.
+                    Still no S3 key here (see AdvisorApplicationDetailDto's javadoc) and no
+                    download-proxy endpoint exists yet, so opening the actual file is still not
+                    possible — this closes the "which files, how big" gap, not the viewing gap.
+                  */}
                   <Card>
-                    <h3 className="font-heading font-semibold text-ink-900 mb-4">Submitted Documents</h3>
-                    <div className="flex items-center gap-3 p-3 bg-ink-100 rounded-xl">
-                      <div className="w-9 h-9 rounded-lg bg-oxblood-50 flex items-center justify-center flex-shrink-0">
-                        <FileIcon className="w-4 h-4 text-oxblood-700" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-ink-800">
-                          {detailApp.docCount} {detailApp.docCount === 1 ? 'document' : 'documents'} submitted
-                        </p>
-                        {/*
-                          Filenames, sizes and previews were invented by the old
-                          mock. The list endpoint returns a count and nothing
-                          else, and no document-download endpoint exists yet.
-                        */}
-                        <p className="text-xs text-ink-400">
-                          Document viewing is not available yet.
-                        </p>
-                      </div>
-                    </div>
+                    <h3 className="font-heading font-semibold text-ink-900 mb-4">
+                      Submitted Documents ({detailApp.documents.length})
+                    </h3>
+                    {detailApp.documents.length === 0 ? (
+                      <p className="text-sm text-ink-400">No documents submitted.</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {detailApp.documents.map((doc, i) => (
+                          <li
+                            key={`${doc.fileName}-${i}`}
+                            className="flex items-center gap-3 p-3 bg-ink-100 rounded-xl"
+                          >
+                            <div className="w-9 h-9 rounded-lg bg-oxblood-50 flex items-center justify-center flex-shrink-0">
+                              <FileIcon className="w-4 h-4 text-oxblood-700" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-ink-800 truncate">{doc.fileName}</p>
+                              <p className="text-xs text-ink-400">
+                                {formatFileSizeKb(doc.sizeBytes)} · {doc.mimeType}
+                              </p>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <p className="text-xs text-ink-400 mt-3">
+                      Document viewing (opening the file itself) is not available yet.
+                    </p>
                   </Card>
 
                   {/* Decision card */}
@@ -716,19 +798,39 @@ export function AdminDashboardPage() {
                     <h3 className="font-heading font-semibold text-ink-900 mb-4">Application Decision</h3>
                     {canDecide(detailApp.status) ? (
                       <div className="space-y-3">
-                        <Button
-                          variant="success"
-                          fullWidth
-                          className="justify-center"
-                          loading={decidingId === detailApp.id && decision.variables?.decision === 'approve'}
-                          disabled={decidingId === detailApp.id}
-                          onClick={() =>
-                            submitDecision(detailApp.id, 'approve', adminNotes, { returnToList: true })
-                          }
-                        >
-                          <CheckCircle className="w-4 h-4" />
-                          Approve Application
-                        </Button>
+                        {(() => {
+                          const licenseRequired =
+                            detailApp.sectors.includes('Finance') ||
+                            detailApp.sectors.includes('Mental Health')
+                          const blockedByLicense = licenseRequired && !detailApp.licenseVerified
+                          return (
+                            <>
+                              <Button
+                                variant="success"
+                                fullWidth
+                                className="justify-center"
+                                loading={decidingId === detailApp.id && decision.variables?.decision === 'approve'}
+                                disabled={decidingId === detailApp.id || blockedByLicense}
+                                title={
+                                  blockedByLicense
+                                    ? 'Verify the professional license above before this application can be approved'
+                                    : undefined
+                                }
+                                onClick={() =>
+                                  submitDecision(detailApp.id, 'approve', adminNotes, { returnToList: true })
+                                }
+                              >
+                                <CheckCircle className="w-4 h-4" />
+                                Approve Application
+                              </Button>
+                              {blockedByLicense && (
+                                <p className="text-xs text-warn-600 -mt-1">
+                                  License must be verified before this application can be approved.
+                                </p>
+                              )}
+                            </>
+                          )
+                        })()}
 
                         {/*
                           `NEEDS_MORE_INFO` is a real application status, but no

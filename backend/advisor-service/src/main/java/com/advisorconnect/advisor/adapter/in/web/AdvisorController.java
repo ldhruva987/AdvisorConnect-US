@@ -57,6 +57,19 @@ public class AdvisorController {
         return queryUseCase.getApplications(status, pageable);
     }
 
+    /**
+     * Admin only — the full application record, PII and license credentials included.
+     *
+     * <p>Sits under the same {@code /advisors/applications/**} matcher {@code SecurityConfig}
+     * already requires authentication (and, via {@code @PreAuthorize} here, ADMIN) for, so no
+     * security-config change was needed to add this path.
+     */
+    @GetMapping("/applications/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public AdvisorApplicationDetailDto getApplicationDetail(@PathVariable UUID id) {
+        return queryUseCase.getApplicationDetail(id);
+    }
+
     /** Public — get advisor public profile by username */
     @GetMapping("/{username}")
     public AdvisorPublicDto getProfile(@PathVariable String username) {
@@ -99,6 +112,19 @@ public class AdvisorController {
             @RequestBody AdminDecisionRequest req,
             @RequestHeader("X-User-Id") UUID adminId) {
         commandUseCase.rejectAdvisor(id, adminId, req.getNotes());
+    }
+
+    /**
+     * Admin only — record that this application's professional license has been checked against
+     * its issuing authority. {@link #approve} refuses a FINANCE/MENTAL_HEALTH application until
+     * this has been called.
+     */
+    @PutMapping("/applications/{id}/verify-license")
+    @PreAuthorize("hasRole('ADMIN')")
+    public void verifyLicense(
+            @PathVariable UUID id,
+            @RequestHeader("X-User-Id") UUID adminId) {
+        commandUseCase.verifyLicense(id, adminId);
     }
 
     // ── Reviews ─────────────────────────────────────────────────────────────────

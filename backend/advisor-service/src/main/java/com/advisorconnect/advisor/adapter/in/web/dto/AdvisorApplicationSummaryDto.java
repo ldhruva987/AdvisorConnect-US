@@ -29,6 +29,16 @@ public class AdvisorApplicationSummaryDto {
     private List<AdvisorSector> sectors;
     private String qualification;
     private String experienceYears;
+
+    /**
+     * Present (non-null) only when the application includes a FINANCE or MENTAL_HEALTH sector —
+     * the license number itself is deliberately not here, only in
+     * {@link AdvisorApplicationDetailDto}, same reasoning as the rest of this class.
+     */
+    private String licenseIssuingAuthority;
+    private String licenseState;
+    private boolean licenseVerified;
+
     private ApplicationStatus status;
     private Instant submittedAt;
     private int documentCount;

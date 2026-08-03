@@ -1,5 +1,6 @@
 package com.advisorconnect.advisor.application;
 
+import com.advisorconnect.advisor.adapter.in.web.dto.AdvisorApplicationDetailDto;
 import com.advisorconnect.advisor.adapter.in.web.dto.AdvisorApplicationSummaryDto;
 import com.advisorconnect.advisor.adapter.in.web.dto.DocumentMetadataRequest;
 import com.advisorconnect.advisor.adapter.in.web.dto.SubmitApplicationRequest;
@@ -8,6 +9,7 @@ import com.advisorconnect.advisor.domain.model.AdvisorApplication;
 import com.advisorconnect.advisor.domain.model.AdvisorSector;
 import com.advisorconnect.advisor.domain.model.ApplicationStatus;
 import com.advisorconnect.advisor.domain.model.DocumentMetadata;
+import com.advisorconnect.advisor.domain.model.LicenseNotVerifiedException;
 import com.advisorconnect.advisor.domain.model.UserEmailCache;
 import com.advisorconnect.advisor.domain.port.out.AdvisorApplicationRepository;
 import com.advisorconnect.advisor.domain.port.out.AdvisorProfileRepository;
@@ -298,6 +300,9 @@ class AdvisorApplicationServiceTest {
             assertThat(dto.getSectors()).containsExactly(AdvisorSector.FINANCE);
             assertThat(dto.getQualification()).isEqualTo("ACA");
             assertThat(dto.getExperienceYears()).isEqualTo("10+");
+            assertThat(dto.getLicenseIssuingAuthority()).isEqualTo("State Board of Accountancy");
+            assertThat(dto.getLicenseState()).isEqualTo("CA");
+            assertThat(dto.isLicenseVerified()).isTrue();
             assertThat(dto.getStatus()).isEqualTo(ApplicationStatus.PENDING);
             assertThat(dto.getSubmittedAt()).isNotNull();
         }
@@ -358,6 +363,220 @@ class AdvisorApplicationServiceTest {
         }
     }
 
+    // ═══════════════════════════════════════════════════ license: submission requirement
+
+    @Nested
+    @DisplayName("submitApplication license requirement")
+    class LicenseRequirement {
+
+        @Test
+        @DisplayName("a FINANCE application with no license fields is refused before anything is written")
+        void financeWithoutLicenseIsRefused() {
+            given(applicationRepository.existsByUserId(userId)).willReturn(false);
+            SubmitApplicationRequest req = request();
+            req.setLicenseNumber(null);
+
+            assertThatCode(() -> service.submitApplication(req, userId))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("license");
+
+            verify(applicationRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("a MENTAL_HEALTH application with a blank issuing authority is refused")
+        void mentalHealthWithBlankAuthorityIsRefused() {
+            given(applicationRepository.existsByUserId(userId)).willReturn(false);
+            SubmitApplicationRequest req = request();
+            req.setSectors(List.of(AdvisorSector.MENTAL_HEALTH));
+            req.setLicenseIssuingAuthority("   ");
+
+            assertThatCode(() -> service.submitApplication(req, userId))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            verify(applicationRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("a CAREER application needs no license fields at all")
+        void careerDoesNotRequireLicense() {
+            given(applicationRepository.existsByUserId(userId)).willReturn(false);
+            given(applicationRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            SubmitApplicationRequest req = request();
+            req.setSectors(List.of(AdvisorSector.CAREER));
+            req.setLicenseNumber(null);
+            req.setLicenseIssuingAuthority(null);
+            req.setLicenseState(null);
+
+            assertThatCode(() -> service.submitApplication(req, userId)).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("a FINANCE application with all three license fields is accepted and persisted")
+        void financeWithLicenseFieldsIsAccepted() {
+            given(applicationRepository.existsByUserId(userId)).willReturn(false);
+            given(applicationRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            service.submitApplication(request(), userId);
+
+            AdvisorApplication saved = captureSaved();
+            assertThat(saved.getLicenseNumber()).isEqualTo("CPA-778214");
+            assertThat(saved.getLicenseIssuingAuthority()).isEqualTo("State Board of Accountancy");
+            assertThat(saved.getLicenseState()).isEqualTo("CA");
+            assertThat(saved.isLicenseVerified()).isFalse();
+        }
+
+        private AdvisorApplication captureSaved() {
+            ArgumentCaptor<AdvisorApplication> captor =
+                    ArgumentCaptor.forClass(AdvisorApplication.class);
+            verify(applicationRepository).save(captor.capture());
+            return captor.getValue();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════ license: approval gate
+
+    @Nested
+    @DisplayName("approveAdvisor license gate")
+    class LicenseGate {
+
+        @Test
+        @DisplayName("an unverified FINANCE application cannot be approved")
+        void unverifiedFinanceCannotBeApproved() {
+            AdvisorApplication app = fullyPopulatedApplication();
+            app.setLicenseVerified(false);
+            given(applicationRepository.findById(applicationId)).willReturn(Optional.of(app));
+
+            assertThatCode(() -> service.approveAdvisor(applicationId, adminId, "looks good"))
+                    .isInstanceOf(LicenseNotVerifiedException.class);
+
+            verify(applicationRepository, never()).save(any());
+            verify(profileRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("a verified FINANCE application can be approved")
+        void verifiedFinanceCanBeApproved() {
+            AdvisorApplication app = fullyPopulatedApplication();
+            app.setLicenseVerified(true);
+            given(applicationRepository.findById(applicationId)).willReturn(Optional.of(app));
+            given(userEmailCacheRepository.findById(userId)).willReturn(Optional.empty());
+
+            assertThatCode(() -> service.approveAdvisor(applicationId, adminId, "looks good"))
+                    .doesNotThrowAnyException();
+
+            verify(profileRepository).save(any());
+        }
+
+        @Test
+        @DisplayName("a CAREER application can be approved without any license verification")
+        void careerNeedsNoVerificationToApprove() {
+            AdvisorApplication app = fullyPopulatedApplication();
+            app.setSectors(List.of(AdvisorSector.CAREER));
+            app.setLicenseVerified(false);
+            given(applicationRepository.findById(applicationId)).willReturn(Optional.of(app));
+            given(userEmailCacheRepository.findById(userId)).willReturn(Optional.empty());
+
+            assertThatCode(() -> service.approveAdvisor(applicationId, adminId, "looks good"))
+                    .doesNotThrowAnyException();
+
+            verify(profileRepository).save(any());
+        }
+
+        @Test
+        @DisplayName("rejecting an unverified FINANCE application is unaffected by the license gate")
+        void rejectIgnoresTheLicenseGate() {
+            AdvisorApplication app = fullyPopulatedApplication();
+            app.setLicenseVerified(false);
+            given(applicationRepository.findById(applicationId)).willReturn(Optional.of(app));
+            given(userEmailCacheRepository.findById(userId)).willReturn(Optional.empty());
+
+            assertThatCode(() -> service.rejectAdvisor(applicationId, adminId, "no"))
+                    .doesNotThrowAnyException();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════ verifyLicense command
+
+    @Nested
+    @DisplayName("verifyLicense")
+    class VerifyLicense {
+
+        @Test
+        @DisplayName("stamps licenseVerified, licenseVerifiedAt and licenseVerifiedBy")
+        void stampsVerification() {
+            AdvisorApplication app = fullyPopulatedApplication();
+            app.setLicenseVerified(false);
+            given(applicationRepository.findById(applicationId)).willReturn(Optional.of(app));
+            Instant before = Instant.now();
+
+            service.verifyLicense(applicationId, adminId);
+
+            ArgumentCaptor<AdvisorApplication> captor = ArgumentCaptor.forClass(AdvisorApplication.class);
+            verify(applicationRepository).save(captor.capture());
+            AdvisorApplication saved = captor.getValue();
+            assertThat(saved.isLicenseVerified()).isTrue();
+            assertThat(saved.getLicenseVerifiedBy()).isEqualTo(adminId);
+            assertThat(saved.getLicenseVerifiedAt()).isNotNull().isBetween(before, Instant.now());
+        }
+
+        @Test
+        @DisplayName("a missing application is reported as not-found")
+        void missingApplicationThrows() {
+            given(applicationRepository.findById(applicationId)).willReturn(Optional.empty());
+
+            assertThatCode(() -> service.verifyLicense(applicationId, adminId))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════ getApplicationDetail
+
+    @Nested
+    @DisplayName("getApplicationDetail")
+    class ApplicationDetail {
+
+        @Test
+        @DisplayName("carries full PII, license credentials, and document metadata without the S3 key")
+        void carriesFullDetail() {
+            AdvisorApplication app = fullyPopulatedApplication();
+            app.getDocuments().add(DocumentMetadata.builder()
+                    .s3Key("s3/secret-key-should-not-leak")
+                    .fileName("license.pdf")
+                    .mimeType("application/pdf")
+                    .sizeBytes(1024L)
+                    .uploadedAt(Instant.now())
+                    .build());
+            given(applicationRepository.findById(applicationId)).willReturn(Optional.of(app));
+
+            AdvisorApplicationDetailDto dto = service.getApplicationDetail(applicationId);
+
+            assertThat(dto.getLegalFirstName()).isEqualTo("Wilhelmina");
+            assertThat(dto.getDateOfBirth()).isEqualTo("1985-03-14");
+            assertThat(dto.getLicenseNumber()).isEqualTo("CPA-778214");
+            assertThat(dto.isLicenseVerified()).isTrue();
+            assertThat(dto.getDocuments()).hasSize(2);
+            assertThat(dto.getDocuments())
+                    .extracting(AdvisorApplicationDetailDto.DocumentSummary::getFileName)
+                    .contains("license.pdf");
+
+            List<String> declaredFields = java.util.Arrays
+                    .stream(AdvisorApplicationDetailDto.DocumentSummary.class.getDeclaredFields())
+                    .map(java.lang.reflect.Field::getName)
+                    .toList();
+            assertThat(declaredFields).doesNotContain("s3Key");
+        }
+
+        @Test
+        @DisplayName("a missing application is reported as not-found")
+        void missingApplicationThrows() {
+            given(applicationRepository.findById(applicationId)).willReturn(Optional.empty());
+
+            assertThatCode(() -> service.getApplicationDetail(applicationId))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════ helpers
 
     private void givenApplication(ApplicationStatus status) {
@@ -387,6 +606,13 @@ class AdvisorApplicationServiceTest {
                 .dateOfBirth("1985-03-14")
                 .addressFull("42 Privet Drive")
                 .country("GB")
+                .licenseNumber("CPA-778214")
+                .licenseIssuingAuthority("State Board of Accountancy")
+                .licenseState("CA")
+                // Verified by default so the pre-existing approve/reject fixtures below (which
+                // predate license verification) keep exercising what they always meant to test —
+                // dedicated tests below cover the unverified-blocks-approval case explicitly.
+                .licenseVerified(true)
                 .documents(new java.util.ArrayList<>(List.of(
                         DocumentMetadata.builder().s3Key("s3/passport.pdf").build())))
                 .status(ApplicationStatus.PENDING)
@@ -408,6 +634,9 @@ class AdvisorApplicationServiceTest {
         req.setDateOfBirth("1985-03-14");
         req.setAddressFull("42 Privet Drive");
         req.setCountry("GB");
+        req.setLicenseNumber("CPA-778214");
+        req.setLicenseIssuingAuthority("State Board of Accountancy");
+        req.setLicenseState("CA");
         req.setDocuments(new java.util.ArrayList<>(List.of(documents)));
         return req;
     }

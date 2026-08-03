@@ -81,6 +81,32 @@ public class AdvisorApplication {
     @Column(name = "country_enc")
     private String country;
 
+    // ── Professional license (required for FINANCE and MENTAL_HEALTH sectors — see
+    // AdvisorApplicationService#requiresLicense). licenseNumber is encrypted like the identity
+    // fields above: it is the one credential here that, combined with the issuing authority,
+    // uniquely identifies the person to a state/federal licensing board. Issuing authority and
+    // state are not encrypted — they are categorical facts an admin needs to filter and sort on,
+    // not identity themselves.
+    @Convert(converter = AesGcmStringConverter.class)
+    @Column(name = "license_number_enc")
+    private String licenseNumber;
+
+    /** e.g. "California Board of Behavioral Sciences", "SEC", "FINRA". */
+    private String licenseIssuingAuthority;
+
+    /** Two-letter state code the license was issued in, or "FEDERAL" for SEC/FINRA-level credentials. */
+    private String licenseState;
+
+    /**
+     * Set only by {@code AdvisorApplicationService#verifyLicense} — an admin confirming they
+     * checked this license against the issuing authority's own lookup. {@code approveAdvisor}
+     * refuses to promote a FINANCE or MENTAL_HEALTH application to APPROVED until this is true;
+     * there used to be no way to record that this check ever happened at all.
+     */
+    private boolean licenseVerified;
+    private Instant licenseVerifiedAt;
+    private UUID licenseVerifiedBy;
+
     // ── Document references (never exposed via public API)
     @ElementCollection
     @CollectionTable(name = "application_documents")

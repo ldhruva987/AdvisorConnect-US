@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import userEvent from '@testing-library/user-event'
 import { server } from '@/test/mocks/server'
-import { MOCK_APPLICATION_DTOS } from '@/test/mocks/handlers/advisors'
+import { MOCK_APPLICATION_DETAIL_DTOS, MOCK_APPLICATION_DTOS } from '@/test/mocks/handlers/advisors'
 import { Toaster } from '@/shared/components/ui/Toast'
 import { render, screen, waitFor, within } from '@/test/test-utils'
-import type { AdminStatsDto, AdvisorApplicationSummaryDto, Page } from '@/types/api'
+import type {
+  AdminStatsDto,
+  AdvisorApplicationDetailDto,
+  AdvisorApplicationSummaryDto,
+  Page,
+} from '@/types/api'
 import { AdminDashboardPage } from './AdminDashboardPage'
 
 /**
@@ -261,25 +266,110 @@ describe('AdminDashboardPage', () => {
       expect(screen.queryByText(SECOND_APPLICATION.legalName!)).not.toBeInTheDocument()
     })
 
-    it('states which PII is withheld instead of rendering blurred filler', async () => {
+    it('shows the applicant PII the detail endpoint now actually returns', async () => {
       const user = userEvent.setup()
       renderAdmin()
       await openApplicationsTab(user)
       await user.click(screen.getByRole('button', { name: `Review ${FIRST_APPLICATION.username}` }))
 
+      // GET /advisors/applications/{id} is real now — date of birth and address used to be
+      // unavailable to the detail panel entirely; now they render from the real response.
+      expect(await screen.findByText('1988-04-02')).toBeInTheDocument()
+      expect(screen.getByText('1 Example Street, Dublin')).toBeInTheDocument()
+    })
+
+    it('reports the real document list, not a fabricated one', async () => {
+      const user = userEvent.setup()
+      renderAdmin()
+      await openApplicationsTab(user)
+      await user.click(screen.getByRole('button', { name: `Review ${FIRST_APPLICATION.username}` }))
+
+      expect(await screen.findByText('Submitted Documents (3)')).toBeInTheDocument()
+      expect(screen.getByText('degree.pdf')).toBeInTheDocument()
+      expect(screen.getByText(/document viewing.*is not available yet/i)).toBeInTheDocument()
+    })
+  })
+
+  /* ---------------------------------------------------------------------- */
+  /* License verification (Finance / Mental Health applications only)      */
+  /* ---------------------------------------------------------------------- */
+
+  describe('license verification', () => {
+    const UNVERIFIED_FINANCE_SUMMARY: AdvisorApplicationSummaryDto = {
+      ...FIRST_APPLICATION,
+      id: 'application-finance',
+      username: 'rae_finch',
+      sectors: ['FINANCE'],
+      licenseVerified: false,
+    }
+
+    const UNVERIFIED_FINANCE_DETAIL: AdvisorApplicationDetailDto = {
+      ...MOCK_APPLICATION_DETAIL_DTOS[0],
+      id: 'application-finance',
+      username: 'rae_finch',
+      sectors: ['FINANCE'],
+      licenseNumber: 'CPA-99231',
+      licenseIssuingAuthority: 'State Board of Accountancy',
+      licenseState: 'CA',
+      licenseVerified: false,
+    }
+
+    function useUnverifiedFinanceApplication() {
+      server.use(
+        http.get('*/api/advisors/applications', () =>
+          HttpResponse.json(pageOf([UNVERIFIED_FINANCE_SUMMARY])),
+        ),
+        http.get('*/api/advisors/applications/:id', ({ params }) =>
+          params.id === 'application-finance'
+            ? HttpResponse.json(UNVERIFIED_FINANCE_DETAIL)
+            : HttpResponse.json({ message: 'not found' }, { status: 404 }),
+        ),
+      )
+    }
+
+    it('disables Approve for an unverified Finance application and explains why', async () => {
+      const user = userEvent.setup()
+      useUnverifiedFinanceApplication()
+      renderAdmin()
+      await user.click(screen.getByRole('button', { name: /^applications/i }))
+      await user.click(await screen.findByRole('button', { name: 'Review rae_finch' }))
+
+      expect(await screen.findByText('Not Verified')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /approve application/i })).toBeDisabled()
       expect(
-        await screen.findByText(/date of birth, email and address are not included/i),
+        screen.getByText(/license must be verified before this application can be approved/i),
       ).toBeInTheDocument()
     })
 
-    it('reports the document count and does not fabricate filenames', async () => {
+    it('marking the license as verified enables Approve', async () => {
       const user = userEvent.setup()
+      useUnverifiedFinanceApplication()
+      server.use(
+        http.put('*/api/advisors/applications/:id/verify-license', () =>
+          new HttpResponse(null, { status: 200 }),
+        ),
+      )
+      // Once verified, the detail refetch must reflect it — the mutation invalidates the
+      // detail query, so the next GET has to answer differently from the first.
+      let verified = false
+      server.use(
+        http.get('*/api/advisors/applications/:id', () =>
+          HttpResponse.json({ ...UNVERIFIED_FINANCE_DETAIL, licenseVerified: verified }),
+        ),
+        http.put('*/api/advisors/applications/:id/verify-license', () => {
+          verified = true
+          return new HttpResponse(null, { status: 200 })
+        }),
+      )
       renderAdmin()
-      await openApplicationsTab(user)
-      await user.click(screen.getByRole('button', { name: `Review ${FIRST_APPLICATION.username}` }))
+      await user.click(screen.getByRole('button', { name: /^applications/i }))
+      await user.click(await screen.findByRole('button', { name: 'Review rae_finch' }))
 
-      expect(await screen.findByText('3 documents submitted')).toBeInTheDocument()
-      expect(screen.getByText(/document viewing is not available yet/i)).toBeInTheDocument()
+      expect(await screen.findByText('Not Verified')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: /mark license as verified/i }))
+
+      expect(await screen.findByText('Verified')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /approve application/i })).toBeEnabled()
     })
   })
 
@@ -372,12 +462,16 @@ describe('AdminDashboardPage', () => {
 
     it('offers no decision controls for an application already decided', async () => {
       const user = userEvent.setup()
+      const approvedDetail = { ...MOCK_APPLICATION_DETAIL_DTOS[0], status: 'APPROVED' as const }
       server.use(
         http.get('*/api/advisors/applications', () =>
           HttpResponse.json(
             pageOf([{ ...FIRST_APPLICATION, status: 'APPROVED' } as AdvisorApplicationSummaryDto]),
           ),
         ),
+        // The detail panel's status now comes from GET /advisors/applications/{id} directly,
+        // not from the list cache — both have to agree for canDecide() to see APPROVED.
+        http.get('*/api/advisors/applications/:id', () => HttpResponse.json(approvedDetail)),
       )
       renderAdmin()
       await user.click(screen.getByRole('button', { name: /^applications/i }))

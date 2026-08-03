@@ -142,11 +142,65 @@ export interface AdvisorApplicationSummaryDto {
   qualification: string
   experienceYears: string
   previousWork: string
+  /** Non-null only when `sectors` includes FINANCE or MENTAL_HEALTH. */
+  licenseIssuingAuthority?: string
+  licenseState?: string
+  licenseVerified: boolean
   status: ApplicationStatus
   submittedAt: string
   docCount: number
   avatarColor: string
   legalName?: string
+}
+
+/**
+ * `GET /advisors/applications/{id}` — REAL backend endpoint, admin-only.
+ *
+ * The full application record: everything {@link AdvisorApplicationSummaryDto} withholds
+ * (legal name, DOB, address, country, license number, document metadata) because the summary is a
+ * PII-free triage list and this is the actual review screen. `documents` never carries the S3 key
+ * — see the backend DTO's javadoc — so full document *viewing* still isn't available, only
+ * filename/type/size/upload time.
+ */
+export interface AdvisorApplicationDetailDto {
+  id: string
+  userId: string
+  username: string
+  professionalTitle: string
+  bio: string
+  sectors: AdvisorSectorEnum[]
+  qualification: string
+  fieldOfStudy: string
+  experienceYears: string
+  previousWork: string
+
+  legalFirstName: string
+  legalLastName: string
+  dateOfBirth: string
+  addressFull: string
+  country: string
+
+  licenseNumber?: string
+  licenseIssuingAuthority?: string
+  licenseState?: string
+  licenseVerified: boolean
+  licenseVerifiedAt?: string
+  licenseVerifiedBy?: string
+
+  documents: DocumentSummaryDto[]
+
+  status: ApplicationStatus
+  adminNotes?: string
+  submittedAt: string
+  reviewedAt?: string
+  reviewedBy?: string
+}
+
+export interface DocumentSummaryDto {
+  fileName: string
+  mimeType: string
+  sizeBytes: number
+  uploadedAt: string
 }
 
 /**
@@ -158,10 +212,25 @@ export interface AdminDecisionRequest {
 }
 
 /**
+ * One uploaded identity document, as described to the backend after the file has been PUT to its
+ * pre-signed S3 URL. Mirrors advisor-service's `DocumentMetadataRequest` field-for-field.
+ */
+export interface DocumentMetadataRequest {
+  s3Key: string
+  fileName: string
+  sizeBytes: number
+  mimeType: string
+}
+
+/**
  * `POST /advisors/apply` body — REAL today, mirrors advisor-service's
  * `SubmitApplicationRequest` field-for-field (including the PII block, which
  * the backend stores encrypted and never echoes back in a public DTO).
  * Responds `201` with the new application's UUID as a bare JSON string.
+ *
+ * `documents` (not a bare key list): the backend's `@NotEmpty @Valid List<DocumentMetadataRequest>`
+ * rejects anything else with a 400 — a plain `string[]` of object keys used to be sent here, which
+ * the backend has never accepted; every real submission failed validation.
  */
 export interface SubmitApplicationRequest {
   username: string
@@ -180,8 +249,11 @@ export interface SubmitApplicationRequest {
   dateOfBirth: string
   addressFull: string
   country: string
-  /** Object keys returned by `POST /advisors/apply/upload-url`. */
-  documentS3Keys: string[]
+  /** Required only when `sectors` includes FINANCE or MENTAL_HEALTH — enforced server-side. */
+  licenseNumber?: string
+  licenseIssuingAuthority?: string
+  licenseState?: string
+  documents: DocumentMetadataRequest[]
 }
 
 /**

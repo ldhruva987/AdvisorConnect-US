@@ -51,6 +51,10 @@ export interface AdvisorApplication {
   qualification: string
   experienceYears: string
   previousWork: string
+  /** Non-empty only when `sectors` includes Finance or Mental Health. */
+  licenseIssuingAuthority?: string
+  licenseState?: string
+  licenseVerified: boolean
   status: ApplicationStatus
   submittedAt: string
   docCount: number
@@ -58,6 +62,51 @@ export interface AdvisorApplication {
   // Admin-only fields (never returned by public API)
   legalName?: string
   realNameBlurred?: string
+}
+
+/** One submitted identity/qualification document, filename and size only — never the S3 key. */
+export interface ApplicationDocumentSummary {
+  fileName: string
+  mimeType: string
+  sizeBytes: number
+  uploadedAt: string
+}
+
+/**
+ * The full application record for the admin review screen — backed by the real
+ * `GET /advisors/applications/{id}` endpoint, admin-only. Carries the PII and license
+ * credentials `AdvisorApplication` (the PII-free list row) deliberately withholds.
+ */
+export interface AdvisorApplicationDetail {
+  id: string
+  userId: string
+  username: string
+  title: string
+  bio: string
+  sectors: AdvisorSector[]
+  qualification: string
+  fieldOfStudy: string
+  experienceYears: string
+  previousWork: string
+
+  legalFirstName: string
+  legalLastName: string
+  dateOfBirth: string
+  addressFull: string
+  country: string
+
+  licenseNumber?: string
+  licenseIssuingAuthority?: string
+  licenseState?: string
+  licenseVerified: boolean
+  licenseVerifiedAt?: string
+
+  documents: ApplicationDocumentSummary[]
+
+  status: ApplicationStatus
+  adminNotes?: string
+  submittedAt: string
+  color: string
 }
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────

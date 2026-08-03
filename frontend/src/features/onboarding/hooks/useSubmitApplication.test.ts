@@ -26,7 +26,9 @@ const APPLICATION: SubmitApplicationRequest = {
   dateOfBirth: '1988-04-02',
   addressFull: '1 Example Street',
   country: 'IE',
-  documentS3Keys: ['applications/user-1/id.pdf'],
+  documents: [
+    { s3Key: 'applications/user-1/id.pdf', fileName: 'id.pdf', sizeBytes: 2048, mimeType: 'application/pdf' },
+  ],
 }
 
 describe('useSubmitApplication', () => {
@@ -58,9 +60,9 @@ describe('useSubmitApplication', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(body).toEqual(APPLICATION)
-    // The backend requires a non-empty key list — files are uploaded ahead of
-    // this call and only their keys are submitted.
-    expect(body?.documentS3Keys).toHaveLength(1)
+    // The backend requires a non-empty list — files are uploaded ahead of this
+    // call and only their metadata (including the S3 key) is submitted.
+    expect(body?.documents).toHaveLength(1)
     // Sectors go over the wire as backend enums, not display labels.
     expect(body?.sectors).toEqual(['PARENTING'])
   })

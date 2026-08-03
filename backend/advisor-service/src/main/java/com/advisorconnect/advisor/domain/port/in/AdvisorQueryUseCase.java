@@ -1,5 +1,6 @@
 package com.advisorconnect.advisor.domain.port.in;
 
+import com.advisorconnect.advisor.adapter.in.web.dto.AdvisorApplicationDetailDto;
 import com.advisorconnect.advisor.adapter.in.web.dto.AdvisorApplicationStatusDto;
 import com.advisorconnect.advisor.adapter.in.web.dto.AdvisorApplicationSummaryDto;
 import com.advisorconnect.advisor.adapter.in.web.dto.AdvisorPublicDto;
@@ -20,4 +21,11 @@ public interface AdvisorQueryUseCase {
      * Results are PII-free summaries, never the entity.
      */
     Page<AdvisorApplicationSummaryDto> getApplications(ApplicationStatus status, Pageable pageable);
+
+    /**
+     * The full application record, PII and license credentials included — admin-only, gated by
+     * {@code hasRole('ADMIN')} at the controller. This is what an admin actually needs to check a
+     * professional license against its issuing authority, which the PII-free summary cannot carry.
+     */
+    AdvisorApplicationDetailDto getApplicationDetail(UUID applicationId);
 }

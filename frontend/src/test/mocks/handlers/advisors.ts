@@ -1,5 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import type {
+  AdvisorApplicationDetailDto,
   AdvisorApplicationSummaryDto,
   AdvisorPublicDto,
   AdvisorReviewDto,
@@ -101,6 +102,7 @@ export const MOCK_APPLICATION_DTOS: AdvisorApplicationSummaryDto[] = [
     qualification: 'MA Child Development',
     experienceYears: '5-10',
     previousWork: 'Community family centre, 2018-2024.',
+    licenseVerified: false,
     status: 'PENDING',
     submittedAt: '2026-07-20T09:00:00Z',
     docCount: 3,
@@ -116,11 +118,71 @@ export const MOCK_APPLICATION_DTOS: AdvisorApplicationSummaryDto[] = [
     qualification: 'BSc Nutrition',
     experienceYears: '2-5',
     previousWork: 'Independent practice since 2021.',
+    licenseVerified: false,
     status: 'UNDER_REVIEW',
     submittedAt: '2026-07-22T16:45:00Z',
     docCount: 2,
     avatarColor: '#006970',
     legalName: 'Devansh Kapoor',
+  },
+]
+
+/**
+ * `GET /advisors/applications/{id}` fixtures — REAL backend endpoint, admin-only.
+ *
+ * Kept field-for-field consistent with the matching {@link MOCK_APPLICATION_DTOS} entry (same
+ * `bio`, `qualification`, doc count, and `legalName` split into first/last) so tests asserting on
+ * the summary and the detail view see the same applicant.
+ */
+export const MOCK_APPLICATION_DETAIL_DTOS: AdvisorApplicationDetailDto[] = [
+  {
+    id: 'application-1',
+    userId: 'user-noor',
+    username: 'noor_haddad',
+    professionalTitle: 'Parenting Consultant',
+    bio: 'Sleep, boundaries, and the toddler years.',
+    sectors: ['PARENTING'],
+    qualification: 'MA Child Development',
+    fieldOfStudy: 'Child Development',
+    experienceYears: '5-10',
+    previousWork: 'Community family centre, 2018-2024.',
+    legalFirstName: 'Noor',
+    legalLastName: 'Haddad',
+    dateOfBirth: '1988-04-02',
+    addressFull: '1 Example Street, Dublin',
+    country: 'IE',
+    licenseVerified: false,
+    documents: [
+      { fileName: 'degree.pdf', mimeType: 'application/pdf', sizeBytes: 204_800, uploadedAt: '2026-07-20T09:00:00Z' },
+      { fileName: 'id-front.png', mimeType: 'image/png', sizeBytes: 51_200, uploadedAt: '2026-07-20T09:00:00Z' },
+      { fileName: 'id-back.png', mimeType: 'image/png', sizeBytes: 51_200, uploadedAt: '2026-07-20T09:00:00Z' },
+    ],
+    status: 'PENDING',
+    submittedAt: '2026-07-20T09:00:00Z',
+  },
+  {
+    id: 'application-2',
+    userId: 'user-dev',
+    username: 'dev_kapoor',
+    professionalTitle: 'Wellness Coach',
+    bio: 'Habit design for people who hate habit trackers.',
+    sectors: ['HEALTH_WELLNESS', 'LIFE_COACHING'],
+    qualification: 'BSc Nutrition',
+    fieldOfStudy: 'Nutrition Science',
+    experienceYears: '2-5',
+    previousWork: 'Independent practice since 2021.',
+    legalFirstName: 'Devansh',
+    legalLastName: 'Kapoor',
+    dateOfBirth: '1994-11-15',
+    addressFull: '22 MG Road, Bengaluru',
+    country: 'IN',
+    licenseVerified: false,
+    documents: [
+      { fileName: 'certificate.pdf', mimeType: 'application/pdf', sizeBytes: 153_600, uploadedAt: '2026-07-22T16:45:00Z' },
+      { fileName: 'id-front.png', mimeType: 'image/png', sizeBytes: 51_200, uploadedAt: '2026-07-22T16:45:00Z' },
+    ],
+    status: 'UNDER_REVIEW',
+    submittedAt: '2026-07-22T16:45:00Z',
   },
 ]
 
@@ -145,6 +207,16 @@ export const advisorHandlers = [
       : MOCK_APPLICATION_DTOS
     return HttpResponse.json(page(content))
   }),
+
+  // ── Application detail (REAL today, admin-only) ─────────────────────────
+  // MUST also precede `/:username` below, for the same reason as the list handler above.
+  http.get('*/api/advisors/applications/:id', ({ params }) => {
+    const detail = MOCK_APPLICATION_DETAIL_DTOS.find((a) => a.id === params.id)
+    if (!detail) return HttpResponse.json({ message: 'Application not found' }, { status: 404 })
+    return HttpResponse.json(detail)
+  }),
+
+  http.put('*/api/advisors/applications/:id/verify-license', () => new HttpResponse(null, { status: 200 })),
 
   // ── Reviews (backend Phase 9) ───────────────────────────────────────────
   http.get('*/api/advisors/:advisorId/reviews', () => HttpResponse.json(page(MOCK_REVIEW_DTOS))),
